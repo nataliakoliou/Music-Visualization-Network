@@ -46,5 +46,5 @@ MP-Dataset
 │   └── ik.jpg
 └──
 
-# These audio files (.mp3) are 30 seconds long (VERB) and have been segmented with a 15-second overlap.
-# These image files (.jpg) have been resized to 256x256 pixels.
+> audios: 30 seconds long
+> images: 256x256 pixels
