@@ -45,3 +45,5 @@ MP-Dataset
 │   ├── ...
 │   └── ik.jpg
 └──
+
+# The audio segments (.mp3) are 30 seconds long with a 15-second overlap.
