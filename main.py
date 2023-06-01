@@ -9,8 +9,9 @@ import librosa
 import numpy as np
 import torchvision.transforms as transforms
 from PIL import Image
+import torchvision.models as models
 
-from models import Encoder, Generator, Discriminator
+from models import Encoder, Generator
 
 # UTILS ###############################################################################################################################
 
@@ -38,11 +39,57 @@ def triplet_margin_loss(anchor, positive, negative):
 
 def show_image(image):
     image = image.squeeze(0).detach().cpu().numpy()
-    image = (image + 1) / 2.0  # rescales the pixel values from [-1, 1] to [0, 1]
     image = image.transpose(1, 2, 0)  # Transpose the dimensions to match the image format (H, W, C)
     plt.imshow(image)
     plt.axis('off')
     plt.show()
+
+def display_layers(vgg, type):
+    for idx, module in enumerate(vgg):
+        if isinstance(module, type):
+            print(f'Layer index: {idx}, Layer name: {module}')
+
+def get_features(image, model, layers):
+    features = {}
+    for name, layer in model._modules.items(): # name: "0", "5", etc.
+        image = layer(image)
+        if name in layers:
+            features[layers[name]] = image
+    return features
+
+def gram_matrix(layer_features):
+    _, c, h, w = layer_features.size()
+    layer_features = layer_features.view(c, h * w)
+    gram = torch.mm(layer_features, layer_features.t())
+    return gram
+
+def style_loss(model, style_image, pair_image):
+    style_loss = 0
+    loss_module = nn.MSELoss().to(device)
+    layers = {'0': 'conv1_1', '5': 'conv2_1', '10': 'conv3_1', '19': 'conv4_1', '28': 'conv5_1'}
+    style_features = get_features(style_image, model, layers)
+    pair_features = get_features(pair_image, model, layers)
+    for layer in pair_features:
+        style_gram = gram_matrix(pair_features[layer])
+        pair_gram = gram_matrix(style_features[layer])
+        layer_loss = loss_module(style_gram, pair_gram)
+        style_loss += layer_loss
+    return style_loss / len(pair_features)
+
+def content_loss(model, style_image, pair_image):
+    content_loss = 0
+    loss_module = nn.MSELoss().to(device)
+    layers = {'21': 'conv4_2'}
+    content_features = get_features(style_image, model, layers)
+    pair_features = get_features(pair_image, model, layers)
+    for layer in pair_features:
+        content_loss += loss_module(pair_features[layer], content_features[layer])
+    return content_loss / len(pair_features)
+
+def mse_loss(style_image, pair_image):
+    loss_module = nn.MSELoss()
+    loss = loss_module(style_image, pair_image)
+    return loss
 
 # MAIN FUNCTION #######################################################################################################################
 
@@ -60,7 +107,8 @@ for era, path in zip(eras, eras_paths):
         if file.endswith('.mp3'):
             audio_path = os.path.join(path, file)
             ms = compute_mel_spectrogram(audio_path, False)
-            mel_spectrograms.append((ms,era))
+            pair = "i" + file.split(".")[0][1:] + ".jpg"
+            mel_spectrograms.append((ms, era, pair))
 
 # 1) TRAIN THE ENCODER ################################################################################################################
 
@@ -75,11 +123,11 @@ encoder = encoder.to(device)
 optimizer = optim.Adam(encoder.parameters(), lr=learning_rate)
 
 for epoch in range(num_epochs):
-    for ms, era in mel_spectrograms:
+    for ms, era, pair in mel_spectrograms:
         ms = torch.tensor(ms).unsqueeze(0).expand(batch_size, in_channels, -1, -1).to(device)
         optimizer.zero_grad()
-        pos_ms = random.choice([torch.tensor(m).unsqueeze(0).expand(batch_size, in_channels, -1, -1).to(device) for m, e in mel_spectrograms if e == era and m != ms])
-        neg_ms = random.choice([torch.tensor(m).unsqueeze(0).expand(batch_size, in_channels, -1, -1).to(device) for m, e in mel_spectrograms if e != era])
+        pos_ms = random.choice([torch.tensor(m).unsqueeze(0).expand(batch_size, in_channels, -1, -1).to(device) for m, e, p in mel_spectrograms if e == era and m != ms])
+        neg_ms = random.choice([torch.tensor(m).unsqueeze(0).expand(batch_size, in_channels, -1, -1).to(device) for m, e, p in mel_spectrograms if e != era])
         loss = triplet_margin_loss(encoder(ms), encoder(pos_ms), encoder(neg_ms)) # forward pass & loss calculation
         loss.backward()
         optimizer.step()
@@ -93,7 +141,7 @@ encoder = Encoder()
 encoder.load_state_dict(torch.load('/content/drive/MyDrive/MODELS/encoder.pth'))
 encoder = encoder.to(device)
 
-third_ms = torch.tensor(mel_spectrograms[3][0]).unsqueeze(0).expand(batch_size, in_channels, -1, -1).to(device)
+third_ms = torch.tensor(mel_spectrograms[3][0]).unsqueeze(0).expand(batch_size, in_channels, -1, -1).to(device) # 3rd element of the tuple at index 0
 encoded_audio = encoder(third_ms)
 encoded_audio = encoded_audio[0, 0].cpu().detach().numpy()
 show_spectrogram("third", encoded_audio)
@@ -106,7 +154,6 @@ batch_size = 1
 in_channels = 1
 
 generator = Generator().to(device)
-discriminator = Discriminator().to(device)
 
 third_ms = torch.tensor(mel_spectrograms[3][0]).unsqueeze(0).expand(batch_size, in_channels, -1, -1).to(device)
 encoded_audio = encoder(third_ms)
@@ -116,7 +163,7 @@ image = generator(ms)
 
 show_image(image)
 
-# 4) TRAIN THE GENERATOR ###############################################################################################################
+# 4) TRAIN THE GAN #####################################################################################################################
 
 learning_rate = 0.0001
 num_epochs = 2
@@ -124,25 +171,36 @@ batch_size = 1
 in_channels = 1
 
 generator = Generator().to(device)
-discriminator = Discriminator().to(device)
 transform = transforms.ToTensor()
 
-gen_optimizer = optim.Adam(generator.parameters(), lr=learning_rate)
-disc_optimizer = optim.Adam(generator.parameters(), lr=learning_rate)
+optimizer = optim.Adam(generator.parameters(), lr=learning_rate)
+
+vgg = models.vgg19(pretrained=True).features.to(device).eval()
+# display_layers(vgg, nn.Conv2d)
 
 for epoch in range(num_epochs):
-    for ms, era in mel_spectrograms:
+    for ms, era, pair in mel_spectrograms:
         ms = torch.tensor(ms).unsqueeze(0).expand(batch_size, in_channels, -1, -1).to(device)
-        ms = torch.cat((encoder(ms), torch.randn(1, 256, 8, 8)), dim=1)
-        real_image_tensor = transform(real_image).unsqueeze(0)
+        SA = torch.cat((encoder(ms), torch.randn(1, 256, 8, 8).to(device)), dim=1)
+        PI = transform(Image.open(os.path.join(dataset_path, era, pair))).unsqueeze(0).to(device)
+        SI = (generator(SA) + 1) / 2
 
-        # TRAIN GENERATOR
-        gen_optimizer.zero_grad()
-        style_image = generator(ms)
+        #show_image(SI)
+        #show_image(PI)
+
+        optimizer.zero_grad()
         
+        loss = mse_loss(SI,PI)
+        print(loss)
+
+        #loss = 0*style_loss(vgg, SI, PI) + 0*content_loss(vgg, SI, PI) + 0*mse_loss(SI, PI) + vgg_loss(vgg, SI, PI)
         loss.backward()
         optimizer.step()
-        #print(f"Epoch {epoch+1}/{num_epochs}, Loss: {loss.item()}")
+
+show_image(SI)
+show_image(PI)
+
+random_input = (generator(torch.randn(1, 257, 8, 8).to(device)) + 1) / 2
+show_image(random_input)
 
 torch.save(generator.state_dict(), "/content/drive/MyDrive/MODELS/generator.pth")
-torch.save(discriminator.state_dict(), "/content/drive/MyDrive/MODELS/discriminator.pth")
