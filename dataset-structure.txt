@@ -46,5 +46,5 @@ MP-Dataset
 │   └── ik.jpg
 └──
 
-> audios: 30 seconds long
-> images: 256x256 pixels
+> audios: 2.97 seconds long
+> images: 64 x 64 pixels
