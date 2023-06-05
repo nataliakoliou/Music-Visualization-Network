@@ -104,12 +104,16 @@ class Discriminator(Module):
 
         self.layers = Sequential(
             Conv2d(in_channels=3, out_channels=64, kernel_size=4, stride=2, padding=1),
+            BatchNorm2d(64),
             LeakyReLU(0.2, inplace=True),
             Conv2d(in_channels=64, out_channels=128, kernel_size=4, stride=2, padding=1),
+            BatchNorm2d(128),
             LeakyReLU(0.2, inplace=True),
             Conv2d(in_channels=128, out_channels=256, kernel_size=4, stride=2, padding=1),
+            BatchNorm2d(256),
             LeakyReLU(0.2, inplace=True),
             Conv2d(in_channels=256, out_channels=256, kernel_size=4, stride=2, padding=1),
+            BatchNorm2d(256),
             LeakyReLU(0.2, inplace=True),
         )
 
