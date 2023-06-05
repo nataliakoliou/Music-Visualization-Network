@@ -210,15 +210,26 @@ for epoch in range(num_epochs):
         gen_optimizer.zero_grad()
         dis_optimizer.zero_grad()
         
-        gen_loss = feature_matching_loss(PF,SF) + nll_loss(classifier(SI), classifier(PI)) + style_loss(vgg,SI,PI)
-        dis_loss = - feature_matching_loss(PF,SF)
+        gen_loss = feature_matching_loss(PF,SF) + \
+        nll_loss(classifier(SI), torch.tensor([to_numerical(era)]).to(device)) + \
+        style_loss(vgg,SI,PI)
+
+        show_image(SI)
 
         gen_loss.backward()
         gen_optimizer.step()
 
+        PF, SF = PF.detach(), SF.detach()
+        PF.requires_grad_(); SF.requires_grad_()
+
+        dis_loss = - feature_matching_loss(PF,SF)
+        dis_loss.backward()
+        dis_optimizer.step()
+
 show_image(SI)
 show_image(PI)
 
+print("RANDOMMMM")
 random_input = (generator(torch.randn(1, 257, 8, 8).to(device)) + 1) / 2
 show_image(random_input)
 
