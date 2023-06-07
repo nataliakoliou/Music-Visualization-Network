@@ -18,7 +18,7 @@ class Encoder(Module):
         super(Encoder, self).__init__()
 
         self.layers = Sequential(
-            Conv2d(in_channels=1, out_channels=32, kernel_size=3, stride=1, padding=1),
+            Conv2d(in_channels=3, out_channels=32, kernel_size=3, stride=1, padding=1),
             InstanceNorm2d(32),
             ReLU(inplace=True),
             MaxPool2d(kernel_size=2, stride=2),
@@ -91,7 +91,7 @@ class Generator(Module):
             SelfAttention(in_channels=128, num_heads=4),
             Upsample(scale_factor=2),
             Conv2d(in_channels=128, out_channels=3, kernel_size=3, stride=1, padding=1),
-            Tanh(),
+            Tanh(), # needed?
         )
 
     def forward(self, x):
