@@ -4,6 +4,7 @@ import random
 import torch.nn as nn
 import torch.optim as optim
 from google.colab import drive
+from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 import librosa
 import numpy as np
@@ -16,27 +17,46 @@ from models import Encoder, Classifier, Generator, Discriminator
 
 # UTILS ###############################################################################################################################
 
-def show_spectrogram(name, ms, sr=22050, hl=256):
+def show_spectrogram(name, ms, sr, hop_length):
     ms = librosa.power_to_db(ms, ref=np.max)
     plt.figure(figsize=(10, 6))
-    librosa.display.specshow(ms, sr=sr, hop_length=hl, x_axis='time', y_axis='mel')
+    librosa.display.specshow(ms, sr=sr, hop_length=hop_length, x_axis='time', y_axis='mel')
     plt.colorbar(format='%+2.0f dB')
     plt.title(f"Mel-frequency spectrogram - {name}")
     plt.xlabel('Time')
     plt.ylabel('Hz')
     plt.show()
 
-def compute_mel_spectrogram(audio_path, display):
-    waveform, sr = librosa.load(audio_path, sr=22050)
+def get_mel_spectrogram(audio_path, sr, n_fft, hop_length, n_mels, display):
+    spectrograms = []
+    waveform, _ = librosa.load(audio_path, sr=sr)
     audio_name = os.path.basename(audio_path)
-    spectrogram = librosa.feature.melspectrogram(y=waveform, sr=sr, n_fft=1024, hop_length=256, n_mels=128)
-    show_spectrogram(audio_name, spectrogram, sr, 256) if display else None
-    return spectrogram
+    for i in range(3):
+        segment = waveform[int(i * 2.97 * sr):int((i + 1) * 2.97 * sr)]
+        spectrogram = librosa.feature.melspectrogram(y=segment, sr=sr, n_fft=n_fft, hop_length=hop_length, n_mels=n_mels)
+        show_spectrogram(f"{audio_name} (Segment {i+1})", spectrogram, sr, hop_length) if display else None
+        spectrograms.append(spectrogram.numpy())
+    return spectrograms
+
+def prepare_data(dataset_path, eras, sr, n_fft, hop_length, n_mels, display):
+    data = []
+    eras_paths = [os.path.join(dataset_path, era) for era in eras]
+    for era, path in zip(eras, eras_paths):
+        audios = sorted([file for file in os.listdir(path) if file.endswith('.mp3')], key=lambda x: int(x[1:].split('.')[0]))
+        for audio in audios:
+            audio_path = os.path.join(path, audio)
+            ms = get_mel_spectrogram(audio_path, sr=sr, n_fft=n_fft, hop_length=hop_length, n_mels=n_mels, display=display)
+            id = int(audio.split(".")[0][1:])
+            pairs = ["i" + str(id + len(audios) * i) + ".jpg" for i in range(3)]
+            data.extend([(ms, era, pair) for pair in pairs])
+    return data
 
 def triplet_margin_loss(anchor, positive, negative):
     TML = nn.TripletMarginLoss(margin=1.0, p=2)
     loss = TML(anchor, positive, negative)
     return loss
+
+#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#**#
 
 def show_image(image):
     image = image.squeeze(0).detach().cpu().numpy()
@@ -102,71 +122,84 @@ def to_numerical(categorical):
 # MAIN FUNCTION #######################################################################################################################
 
 drive.mount('/content/drive')
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 dataset_path = "/content/drive/MyDrive/DATASETS/new_tester"
 eras = ["renaissance", "baroque", "classical", "romantic", "modern"]
-eras_paths = [os.path.join(dataset_path, folder) for folder in eras]
+data = prepare_data(dataset_path, eras, sr=22050, n_fft=1024, hop_length=256, n_mels=128, display=False) # a list of 900*5=4500 elements where each element is a tuple (specs, era, pair) & data[i][0] = i-th specs array is a list of 3 spectrograms
 
-mel_spectrograms = []
-for era, path in zip(eras, eras_paths):
-    for file in os.listdir(path):
-        if file.endswith('.mp3'):
-            audio_path = os.path.join(path, file)
-            ms = compute_mel_spectrogram(audio_path, False)
-            pair = "i" + file.split(".")[0][1:] + ".jpg"
-            mel_spectrograms.append((ms, era, pair))
+BATCHES = 15
+transform = transforms.ToTensor()
+data_loader = DataLoader(data, batch_size=BATCHES, shuffle=True) # len(data_loader) = 900*5 // 15 = 300
+batches = list(data_loader) # a list of 300 lists\batches
 
 # 1) TRAIN THE ENCODER ################################################################################################################
 
 learning_rate = 0.0001
 num_epochs = 2
-batch_size = 1
-in_channels = 1
 
 encoder = Encoder().to(device)
-enc_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate)
+enc_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate, weight_decay=0.0001)
 
 for epoch in range(num_epochs):
-    for ms, era, pair in mel_spectrograms:
-        ms = torch.tensor(ms).unsqueeze(0).expand(batch_size, in_channels, -1, -1).to(device)
+    for dl in data_loader: # dl[0]: the 3 spectrogram-batches of 15 specs each, dl[1]: the 15 era-labels, dl[2]: the 15 pair-images
+        melspecs, eras, pairs = dl
+        melspecs = torch.transpose(torch.stack(melspecs, dim=0), 0, 1) # torch.Size([15, 3, 128, 256])
+        
+        pos_melspecs, neg_melspecs = [], []
+        for sample in range(BATCHES):
+            pos, neg = False, False
+
+            while not pos or not neg:
+                rbID = random.randint(0, len(data_loader) - 1)
+                rand_melspecs, rand_eras = torch.transpose(torch.stack(batches[rbID][0], dim=0), 0, 1), batches[rbID][1] # torch.Size([15, 3, 128, 256]) & tuple of strings
+                rsID = random.randint(0, BATCHES - 1)
+                rand_melspec, rand_era = rand_melspecs[rsID], rand_eras[rsID] # torch.Size([3, 128, 256]) & string
+
+                if not pos and rand_era == eras[sample] and not torch.all(torch.eq(rand_melspec, melspecs[rsID])):
+                    pos_melspecs.append(rand_melspec)
+                    pos = True
+                elif not neg and rand_era != eras[sample]:
+                    neg_melspecs.append(rand_melspec)
+                    neg = True
+
+        pos_melspecs, neg_melspecs = torch.stack(pos_melspecs, dim=0), torch.stack(neg_melspecs, dim=0)
+        EA, EPA, ENA = encoder(melspecs.to(device)), encoder(pos_melspecs.to(device)), encoder(neg_melspecs.to(device))
+
         enc_optimizer.zero_grad()
-        pos_ms = random.choice([torch.tensor(m).unsqueeze(0).expand(batch_size, in_channels, -1, -1).to(device) for m, e, p in mel_spectrograms if e == era and m != ms])
-        neg_ms = random.choice([torch.tensor(m).unsqueeze(0).expand(batch_size, in_channels, -1, -1).to(device) for m, e, p in mel_spectrograms if e != era])
-        loss = triplet_margin_loss(encoder(ms), encoder(pos_ms), encoder(neg_ms)) # forward pass & loss calculation
+        loss = triplet_margin_loss(EA, EPA, ENA)
         loss.backward()
         enc_optimizer.step()
-        #print(f"Epoch {epoch+1}/{num_epochs}, Loss: {loss.item()}")
 
 torch.save(encoder.state_dict(), "/content/drive/MyDrive/MODELS/encoder.pth")
 
 """
-encoder.load_state_dict(torch.load('/content/drive/MyDrive/MODELS/encoder.pth'))
-encoder = encoder.to(device)
-third_ms = torch.tensor(mel_spectrograms[3][0]).unsqueeze(0).expand(batch_size, in_channels, -1, -1).to(device) # 3rd element of the tuple at index 0
-encoded_audio = encoder(third_ms)
-encoded_audio = encoded_audio[0, 0].cpu().detach().numpy()
-show_spectrogram("third", encoded_audio)
+for epoch in range(num_epochs):
+    for dl in data_loader:
+        melspecs, eras, pairs = dl
+        melspecs = torch.transpose(torch.stack(melspecs, dim=0), 0, 1)
+        encoded_audio = encoder(melspecs.to(device))
+        random_index = random.randint(0, BATCHES - 1)
+        encoded_audio_slice = encoded_audio[random_index, 0].detach().cpu().numpy()
+        show_spectrogram(str(random_index), encoded_audio_slice, sr=22050, hop_length=256)
 """
 
 # 2) TRAIN THE CLASSIFIER #################################################################################################################
 
-learning_rate = 0.0001
+learning_rate = 0.00005
 num_epochs = 2
-batch_size = 1
-in_channels = 1
 
 classifier = Classifier().to(device)
-transform = transforms.ToTensor()
-clf_optimizer = optim.Adam(classifier.parameters(), lr=learning_rate)
+clf_optimizer = optim.Adam(classifier.parameters(), lr=learning_rate, weight_decay=0.0001)
 
 for epoch in range(num_epochs):
-    for ms, era, pair in mel_spectrograms:
-        ms = torch.tensor(ms).unsqueeze(0).expand(batch_size, in_channels, -1, -1).to(device)
-        PI = transform(Image.open(os.path.join(dataset_path, era, pair))).unsqueeze(0).to(device)
+    for dl in data_loader: # dl[0]: the 3 spectrogram-batches of 15 specs each, dl[1]: the 15 era-labels, dl[2]: the 15 pair-images
+        melspecs, eras, pairs = dl
+        images = [Image.open(os.path.join(dataset_path, era, pair)) for era, pair in zip(eras, pairs)]
+        PI = torch.stack([transform(img) for img in images])
+        CSI, CPI = torch.tensor([to_numerical(era) for era in eras]).to(device), classifier(PI.to(device))
         clf_optimizer.zero_grad()
-        clf_loss = nll_loss(classifier(PI), torch.tensor([to_numerical(era)]).to(device))
+        clf_loss = nll_loss(CPI, CSI)
         clf_loss.backward()
         clf_optimizer.step()
 
@@ -181,16 +214,13 @@ random_image = transform(Image.open("/content/i54.jpg")).unsqueeze(0).to(device)
 print(classifier(random_image))
 """
 
-# 3) TRAIN THE GAN #####################################################################################################################
+# TODO: 3) TRAIN THE GAN #####################################################################################################################
 
 learning_rate = 0.0001
 num_epochs = 2
-batch_size = 1
-in_channels = 1
 
 generator = Generator().to(device)
 discriminator = Discriminator().to(device)
-transform = transforms.ToTensor()
 
 gen_optimizer = optim.Adam(generator.parameters(), lr=learning_rate)
 dis_optimizer = optim.Adam(discriminator.parameters(), lr=learning_rate)
@@ -199,7 +229,7 @@ vgg = models.vgg19(pretrained=True).features.to(device).eval()
 # display_layers(vgg, nn.Conv2d)
 
 for epoch in range(num_epochs):
-    for ms, era, pair in mel_spectrograms:
+    for ms, era, pair in data:
         ms = torch.tensor(ms).unsqueeze(0).expand(batch_size, in_channels, -1, -1).to(device)
         ms = torch.cat((encoder(ms), torch.randn(1, 256, 8, 8).to(device)), dim=1)
         PI = transform(Image.open(os.path.join(dataset_path, era, pair))).unsqueeze(0).to(device)
@@ -237,7 +267,7 @@ torch.save(generator.state_dict(), "/content/drive/MyDrive/MODELS/generator.pth"
 torch.save(discriminator.state_dict(), "/content/drive/MyDrive/MODELS/discriminator.pth")
 
 """
-third_ms = torch.tensor(mel_spectrograms[3][0]).unsqueeze(0).expand(batch_size, in_channels, -1, -1).to(device)
+third_ms = torch.tensor(data[3][0]).unsqueeze(0).expand(batch_size, in_channels, -1, -1).to(device)
 encoded_audio = encoder(third_ms)
 ms = torch.cat((encoded_audio, torch.randn(1, 256, 8, 8).to(device)), dim=1)
 
