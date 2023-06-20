@@ -126,11 +126,11 @@ encoder.train()
 
 for epoch in range(num_epochs):
     enc_epoch_loss, steps = 0, 0
-    pbar = tqdm(data_loader, desc="Training", total=len(data_loader))
+    pbar = tqdm(data_loader, desc="Epoch {}".format(epoch), total=len(data_loader))
     for i, dl in enumerate(pbar): # dl[0]: the 3 spectrogram-batches of 15 specs each, dl[1]: the 15 era-labels, dl[2]: the 15 pair-images
         melspecs, eras, pairs = dl
         melspecs = torch.transpose(torch.stack(melspecs, dim=0), 0, 1) # torch.Size([15, 3, 128, 256])
-        
+
         pos_melspecs, neg_melspecs = [], []
         for sample in range(BATCH_SIZE):
             pos, neg = False, False
@@ -158,14 +158,20 @@ for epoch in range(num_epochs):
 
         enc_epoch_loss += enc_loss.item()
         steps += 1
-        pbar.set_postfix({'Classifier Loss': '{0:.3f}'.format(enc_epoch_loss/steps)})
+        pbar.set_postfix({'Encoder Loss': '{0:.3f}'.format(enc_epoch_loss/steps)})
 
-        torch.save(encoder.state_dict(), "/content/drive/MyDrive/MODELS/encoder.pth")
+        """if eras[0] == "baroque":
+            encoded_mel = EA[0].squeeze().cpu().detach().numpy()  # Assuming you want to visualize the first example in the batch
+            plt.imshow(encoded_mel, cmap='hot')
+            plt.colorbar()
+            plt.show()"""
 
-# 2) TRAIN THE CLASSIFIER #################################################################################################################
+    torch.save(encoder.state_dict(), "/content/drive/MyDrive/MODELS/encoder.pth")
 
-learning_rate = 0.00005
-num_epochs = 2
+# TODO: 2.1) TRAIN THE CUSTOM CLASSIFIER #################################################################################################################
+
+learning_rate = 0.0001
+num_epochs = 100
 
 classifier = Classifier().to(device)
 classifier.load_state_dict(torch.load("/content/drive/MyDrive/MODELS/classifier.pth", map_location=torch.device('cpu')))
@@ -174,14 +180,77 @@ classifier.train()
 
 for epoch in range(num_epochs):
     clf_epoch_loss, steps = 0, 0
-    pbar = tqdm(data_loader, desc="Training", total=len(data_loader))
+    correct_predictions, total_predictions = 0, 0
+
+    pbar = tqdm(data_loader, desc="Epoch {}".format(epoch), total=len(data_loader))
     for i, dl in enumerate(pbar): # dl[0]: the 3 spectrogram-batches of 15 specs each, dl[1]: the 15 era-labels, dl[2]: the 15 pair-images
         melspecs, eras, pairs = dl
         PI = torch.stack([pair for pair in pairs])
 
-        for img in PI:
+        """for img in PI:
             print(img)
-            show_image(img)
+            show_image(img)"""
+
+        actual_eras, CPI = torch.tensor([to_numerical(era) for era in eras]).to(device), classifier(PI.to(device))
+        
+        clf_optimizer.zero_grad()
+        clf_loss = nll_loss(CPI, actual_eras)
+        clf_loss.backward()
+        clf_optimizer.step()
+
+        predicted_eras = torch.argmax(CPI, dim=1)
+        correct_predictions += torch.sum(predicted_eras == actual_eras).item()
+        total_predictions += actual_eras.size(0)
+        accuracy = correct_predictions / total_predictions
+
+        clf_epoch_loss += clf_loss.item()
+        steps += 1
+        pbar.set_postfix({'Classifier Loss': '{0:.3f}'.format(clf_epoch_loss/steps), 'Accuracy': '{0:.2%}'.format(accuracy)})
+
+    torch.save(classifier.state_dict(), "/content/drive/MyDrive/MODELS/classifier.pth")
+
+# TODO: 2.2) EVALUATE CUSTOM CLASSIFIER #################################################################################################################
+
+learning_rate = 0.0001
+num_epochs = 100
+
+classifier = Classifier().to(device)
+classifier.load_state_dict(torch.load("/content/drive/MyDrive/MODELS/classifier.pth", map_location=torch.device('cpu')))
+classifier.eval()
+
+transform = transforms.Compose([
+    transforms.Resize((64, 64)),  # remove that if it's already (64,64)
+    transforms.ToTensor()
+])
+
+random_image = transform(Image.open("/content/drive/MyDrive/DATASETS/musart-dataset/renaissance/i444.jpg")).unsqueeze(0).to(device)
+
+with torch.no_grad():
+    predicted_era = classifier(random_image)
+    predicted_era = torch.argmax(predicted_era, dim=1).item()
+
+print("Predicted Era:", predicted_era)
+
+# TODO: 2.3) TRAIN THE PRETRAINED CLASSIFIER ############################################################################################################
+
+learning_rate = 0.0001
+num_epochs = 10
+
+classifier = VGG19(num_classes=5).to(device)
+classifier.load_state_dict(torch.load("/content/drive/MyDrive/MODELS/vgg19.pth", map_location=torch.device('cpu')))
+clf_optimizer = optim.Adam(classifier.parameters(), lr=learning_rate, weight_decay=0.0001)
+classifier.train()
+
+for epoch in range(num_epochs):
+    clf_epoch_loss, steps = 0, 0
+    pbar = tqdm(data_loader, desc="Epoch {}".format(epoch), total=len(data_loader))
+    for i, dl in enumerate(pbar): # dl[0]: the 3 spectrogram-batches of 15 specs each, dl[1]: the 15 era-labels, dl[2]: the 15 pair-images
+        melspecs, eras, pairs = dl
+        PI = torch.stack([pair for pair in pairs])
+
+        """for img in PI:
+            print(img)
+            show_image(img)"""
 
         actual_eras, CPI = torch.tensor([to_numerical(era) for era in eras]).to(device), classifier(PI.to(device))
         clf_optimizer.zero_grad()
@@ -193,7 +262,8 @@ for epoch in range(num_epochs):
         steps += 1
         pbar.set_postfix({'Classifier Loss': '{0:.3f}'.format(clf_epoch_loss/steps)})
 
-        torch.save(classifier.state_dict(), "/content/drive/MyDrive/MODELS/classifier.pth")
+    torch.save(classifier.state_dict(), "/content/drive/MyDrive/MODELS/vgg19.pth")
+
 
 # TODO: 3) TRAIN THE GAN #####################################################################################################################
 
