@@ -318,21 +318,22 @@ classifier.eval()
 
 # TODO: 3) TRAIN THE GAN #####################################################################################################################
 
-learning_rate = 0.00001
-num_epochs = 15
-w1 = 1e-9
-w2 = 2
-w3 = 10
-w4 = 10000
+learning_rate = 0.0001
+num_epochs = 75
+w1 = 28*2/3
+w2 = 2*1/6
+w3 = 2*1/6
+w4 = 1e-9
+w5 = 28
 
 generator = Generator().to(device)
-#generator.load_state_dict(torch.load("/content/drive/MyDrive/MODELS/generator.pth", map_location=torch.device('cpu')))
-gen_optimizer = optim.Adam(generator.parameters(), lr=learning_rate)
+generator.load_state_dict(torch.load("/content/drive/MyDrive/MODELS/generator.pth", map_location=torch.device('cpu')))
+gen_optimizer = optim.Adam(generator.parameters(), lr=0.00001)
 generator.train()
 
 discriminator = Discriminator().to(device)
-#discriminator.load_state_dict(torch.load("/content/drive/MyDrive/MODELS/discriminator.pth", map_location=torch.device('cpu')))
-dis_optimizer = optim.Adam(discriminator.parameters(), lr=learning_rate)
+discriminator.load_state_dict(torch.load("/content/drive/MyDrive/MODELS/discriminator.pth", map_location=torch.device('cpu')))
+dis_optimizer = optim.Adam(discriminator.parameters(), lr=0.00005)
 discriminator.train()
 
 vgg19 = VGG19().to(device)
@@ -343,42 +344,46 @@ for epoch in range(num_epochs):
     pbar = tqdm(data_loader, desc="Epoch {}".format(epoch), total=len(data_loader))
     for i, dl in enumerate(pbar):
         melspecs, eras, pairs = dl
-        melspecs = torch.transpose(torch.stack(melspecs, dim=0), 0, 1) # torch.Size([15, 3, 128, 256])
-        EA = torch.cat((encoder(melspecs.to(device)), torch.randn(BATCH_SIZE, 63, 64, 64).to(device)), dim=1)
-        print(EA.shape)
-        SI = generator(EA.to(device)).to(device)
+
+        melspecs = torch.transpose(torch.stack(melspecs, dim=0), 0, 1)
+        EMS8x8 = encoder(melspecs.to(device)) # (15,1,8,8)
+        EA = torch.cat([EMS8x8, torch.randn(BATCH_SIZE, 256, 8, 8).to(device)], dim=1).to(device) # (15,257,8,8)
+        SI = generator(EA.to(device)).to(device) # (15,3,64,64)
         PI = torch.stack([pair for pair in pairs]).requires_grad_(True).to(device)
+        SI, PI = transpose_image(SI), transpose_image(PI)
         actual_eras, CSI = torch.tensor([to_numerical(era) for era in eras]).to(device), classifier(SI.to(device))
 
         VSI = vgg19(SI)
         VPI = vgg19(PI)
-        DSI = discriminator(SI)
-        DPI = discriminator(PI)
+        EMS64x64 = F.interpolate(EMS8x8, size=(64, 64), mode='bilinear', align_corners=False).to(device) # (15,1,64,64)
+
+        DSI = discriminator(torch.cat([EMS64x64, SI], dim=1)) # (15,1,64,64) + (15,3,64,64) = (15,4,64,64)
+        DPI = discriminator(torch.cat([EMS64x64, PI], dim=1))
 
         gen_optimizer.zero_grad()
-        #loss1 = w1 * style_loss(VSI, VPI)
-        #loss2 = w2 * nll_loss(CSI, actual_eras)
-        loss3 = w3 * stGen_loss(DSI)
-        loss4 = w4 * mse_loss(SI, PI)
-        gen_loss = loss3 + loss4
+        #loss1 = w1 * stGen_loss(DSI)
+        loss2 = w2 * nll_loss(CSI, actual_eras)
+        loss3 = w3 * l1_loss(SI, PI)
+        #loss4 = w1 * style_loss(VSI, VPI)
+        gen_loss = loss2 + loss3
         gen_loss.backward()
         gen_optimizer.step()
 
         dis_optimizer.zero_grad()
         DPI, DSI = DPI.detach(), DSI.detach()
-        DPI.requires_grad_(); DSI.requires_grad_()
-        dis_loss = w3 * stDis_loss(DSI, DPI)
+        DPI.requires_grad_();
+        dis_loss = w5 * stDis_loss(DSI, DPI)
         dis_loss.backward()
         dis_optimizer.step()
-        
+
         steps += 1
         gen_epoch_loss += gen_loss.item()
         dis_epoch_loss += dis_loss.item()
         pbar.set_postfix({'Generator Loss': '{0:.3f}'.format(gen_epoch_loss / steps),
                           'Discriminator Loss': '{0:.3f}'.format(dis_epoch_loss / steps)})
-        
-        if epoch % 1 == 0:
-            show_image(SI[0])
+
+    if epoch % 10 == 0:
+        show_image(SI[0])
 
     torch.save(generator.state_dict(), "/content/drive/MyDrive/MODELS/generator.pth")
     torch.save(discriminator.state_dict(), "/content/drive/MyDrive/MODELS/discriminator.pth")
