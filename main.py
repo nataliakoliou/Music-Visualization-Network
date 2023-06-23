@@ -13,6 +13,7 @@ import torchvision.transforms as transforms
 from PIL import Image
 from torchvision import models
 from torch.nn import LogSoftmax
+import torch.nn.functional as F
 #from models import *
 
 # UTILS ###############################################################################################################################
@@ -53,13 +54,9 @@ def prepare_data(dataset_path, eras, sr, n_fft, hop_length, n_mels, display):
     return data
 
 def triplet_margin_loss(anchor, positive, negative):
-    TML = nn.TripletMarginLoss(margin=1.0, p=2)
+    TML = nn.TripletMarginLoss(margin=1.0, p=5)
     loss = TML(anchor, positive, negative)
     return loss
-
-def feature_matching_loss(pair_features, style_features):
-    criterion = nn.MSELoss()
-    return criterion(pair_features, style_features)
 
 def nll_loss(output, target):
     nll = nn.NLLLoss()
@@ -67,24 +64,67 @@ def nll_loss(output, target):
     loss = nll(log_softmax(output), target)
     return loss
 
-def gram_matrix(input):
-    batch_size, num_channels, height, width = input.size()
-    features = input.view(batch_size * num_channels, height * width)
-    gram = torch.mm(features, features.t())
-    norm_gram = gram.div(batch_size * num_channels * height * width)
-    return norm_gram
-
-def style_loss(model, style_image, pair_image):
-    style_features, pair_features = model(style_image), model(pair_image)
-    loss_module = nn.MSELoss().to(device)
-    style_gram = gram_matrix(style_features)
-    pair_gram = gram_matrix(pair_features)
-    loss = loss_module(style_gram, pair_gram)
+def stGen_loss(fake_output):
+    real_labels = torch.ones_like(fake_output)
+    criterion = nn.BCEWithLogitsLoss()
+    loss = criterion(fake_output, real_labels)
     return loss
+
+def stDis_loss(fake_output, real_output):
+    fake_labels = torch.zeros_like(fake_output)
+    real_labels = torch.ones_like(real_output)
+    criterion = nn.BCEWithLogitsLoss()
+    fake_loss = criterion(fake_output, fake_labels)
+    real_loss = criterion(real_output, real_labels)
+    loss = (fake_loss + real_loss) / 2
+    return loss
+
+def mse_loss(predicted, target):
+    criterion = nn.MSELoss()
+    loss = criterion(predicted, target)
+    return loss
+
+def l1_loss(predicted, target):
+    criterion = nn.L1Loss()
+    loss = criterion(predicted, target)
+    return 100 * loss
+
+def raGen_loss(fake_output, real_output):
+    criterion = nn.BCEWithLogitsLoss()
+    ones = torch.ones_like(real_output)
+    zeros = torch.zeros_like(fake_output)
+    mean_real = torch.mean(real_output, dim=1, keepdim=True)
+    mean_fake = torch.mean(fake_output, dim=1, keepdim=True)
+    loss = (criterion(real_output - mean_fake, zeros) + criterion(fake_output - mean_real, ones))/2
+    return loss
+
+def raDis_loss(fake_output, real_output):
+    criterion = nn.BCEWithLogitsLoss()
+    ones = torch.ones_like(real_output)
+    zeros = torch.zeros_like(fake_output)
+    mean_real = torch.mean(real_output, dim=1, keepdim=True)
+    mean_fake = torch.mean(fake_output, dim=1, keepdim=True)
+    loss = (criterion(real_output - mean_fake, ones) + criterion(fake_output - mean_real, zeros))/2
+    return loss
+
+def gram(x):
+    c, _, _ = x.size()
+    x = x.view(c, -1)
+    return torch.mm(x, x.t())
+
+def style_loss(style_features, pair_features):
+    loss, total_samples = 0, len(pair_features)
+    for sample in range(len(style_features)):
+        style_gram = gram(style_features[sample])
+        pair_gram = gram(pair_features[sample])
+        loss += F.mse_loss(style_gram, pair_gram)
+    return loss / total_samples
 
 def show_image(image):
     image = image.detach().cpu().numpy()
     image = image.transpose(1, 2, 0)  # transposes the dimensions to match the image format (H, W, C)
+    image = (image - np.min(image)) / (np.max(image) - np.min(image))  # rescale the values to [0, 1]
+    image = np.clip(image, 0, 1)
     plt.imshow(image) # scales the values in the tensor to the appropriate color range and displays it as an image
     plt.axis('off')
     plt.show()
@@ -120,7 +160,7 @@ learning_rate = 0.0001
 num_epochs = 60
 
 encoder = Encoder().to(device)
-encoder.load_state_dict(torch.load("/content/drive/MyDrive/MODELS/encoder.pth", map_location=torch.device('cpu')))
+#encoder.load_state_dict(torch.load("/content/drive/MyDrive/MODELS/encoder.pth", map_location=torch.device('cpu')))
 enc_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate, weight_decay=0.0001)
 encoder.train()
 
@@ -152,7 +192,7 @@ for epoch in range(num_epochs):
         EA, EPA, ENA = encoder(melspecs.to(device)), encoder(pos_melspecs.to(device)), encoder(neg_melspecs.to(device))
 
         enc_optimizer.zero_grad()
-        enc_loss = triplet_margin_loss(EA, EPA, ENA)
+        enc_loss = triplet_margin_loss(EA.view(EA.size(0), -1), EPA.view(EPA.size(0), -1), ENA.view(ENA.size(0), -1))
         enc_loss.backward()
         enc_optimizer.step()
 
@@ -160,11 +200,11 @@ for epoch in range(num_epochs):
         steps += 1
         pbar.set_postfix({'Encoder Loss': '{0:.3f}'.format(enc_epoch_loss/steps)})
 
-        """if eras[0] == "baroque":
+        if epoch % 10 == 0 and i == 0:
             encoded_mel = EA[0].squeeze().cpu().detach().numpy()  # Assuming you want to visualize the first example in the batch
             plt.imshow(encoded_mel, cmap='hot')
             plt.colorbar()
-            plt.show()"""
+            plt.show()
 
     torch.save(encoder.state_dict(), "/content/drive/MyDrive/MODELS/encoder.pth")
 
@@ -264,55 +304,81 @@ for epoch in range(num_epochs):
 
     torch.save(classifier.state_dict(), "/content/drive/MyDrive/MODELS/vgg19.pth")
 
+# TODO: LOAD THE ENCODER/CLASSIFIER MODELS
+
+encoder = Encoder().to(device)
+encoder_state = torch.load("/content/drive/MyDrive/MODELS/encoder.pth")
+encoder.load_state_dict(encoder_state)
+encoder.eval()
+
+classifier = Classifier().to(device)
+classifier_state = torch.load("/content/drive/MyDrive/MODELS/classifier.pth")
+classifier.load_state_dict(classifier_state)
+classifier.eval()
 
 # TODO: 3) TRAIN THE GAN #####################################################################################################################
 
-learning_rate = 0.0005
+learning_rate = 0.00001
 num_epochs = 15
-vgg = VGG19(pretrained=True, require_grad=False).to(device)
+w1 = 1e-9
+w2 = 2
+w3 = 10
+w4 = 10000
 
 generator = Generator().to(device)
-generator.load_state_dict(torch.load("/content/drive/MyDrive/MODELS/generator.pth", map_location=torch.device('cpu')))
+#generator.load_state_dict(torch.load("/content/drive/MyDrive/MODELS/generator.pth", map_location=torch.device('cpu')))
 gen_optimizer = optim.Adam(generator.parameters(), lr=learning_rate)
 generator.train()
 
 discriminator = Discriminator().to(device)
-discriminator.load_state_dict(torch.load("/content/drive/MyDrive/MODELS/discriminator.pth", map_location=torch.device('cpu')))
+#discriminator.load_state_dict(torch.load("/content/drive/MyDrive/MODELS/discriminator.pth", map_location=torch.device('cpu')))
 dis_optimizer = optim.Adam(discriminator.parameters(), lr=learning_rate)
 discriminator.train()
 
+vgg19 = VGG19().to(device)
+vgg19.eval()
+
 for epoch in range(num_epochs):
     gen_epoch_loss, dis_epoch_loss, steps = 0, 0, 0
-    pbar = tqdm(data_loader, desc="Training", total=len(data_loader))
+    pbar = tqdm(data_loader, desc="Epoch {}".format(epoch), total=len(data_loader))
     for i, dl in enumerate(pbar):
         melspecs, eras, pairs = dl
         melspecs = torch.transpose(torch.stack(melspecs, dim=0), 0, 1) # torch.Size([15, 3, 128, 256])
-        EA = torch.cat((encoder(melspecs.to(device)), torch.randn(BATCH_SIZE, 256, 8, 8).to(device)), dim=1)
-        SI = generator(EA.to(device))
-        PI = torch.stack([pair for pair in pairs])
+        EA = torch.cat((encoder(melspecs.to(device)), torch.randn(BATCH_SIZE, 63, 64, 64).to(device)), dim=1)
+        print(EA.shape)
+        SI = generator(EA.to(device)).to(device)
+        PI = torch.stack([pair for pair in pairs]).requires_grad_(True).to(device)
         actual_eras, CSI = torch.tensor([to_numerical(era) for era in eras]).to(device), classifier(SI.to(device))
-        DPI = discriminator(PI.to(device))
-        DSI = discriminator(SI.to(device))
+
+        VSI = vgg19(SI)
+        VPI = vgg19(PI)
+        DSI = discriminator(SI)
+        DPI = discriminator(PI)
 
         gen_optimizer.zero_grad()
-        gen_loss = 10*feature_matching_loss(DPI, DSI) + 10*nll_loss(CSI, actual_eras) + style_loss(vgg, SI.to(device), PI.to(device))
+        #loss1 = w1 * style_loss(VSI, VPI)
+        #loss2 = w2 * nll_loss(CSI, actual_eras)
+        loss3 = w3 * stGen_loss(DSI)
+        loss4 = w4 * mse_loss(SI, PI)
+        gen_loss = loss3 + loss4
         gen_loss.backward()
         gen_optimizer.step()
-        gen_epoch_loss += gen_loss.item()
-        torch.save(generator.state_dict(), "/content/drive/MyDrive/MODELS/generator.pth")
 
         dis_optimizer.zero_grad()
         DPI, DSI = DPI.detach(), DSI.detach()
         DPI.requires_grad_(); DSI.requires_grad_()
-        dis_loss = - feature_matching_loss(DPI, DSI)
+        dis_loss = w3 * stDis_loss(DSI, DPI)
         dis_loss.backward()
         dis_optimizer.step()
-        dis_epoch_loss += dis_loss.item()
-        torch.save(discriminator.state_dict(), "/content/drive/MyDrive/MODELS/discriminator.pth")
-
+        
         steps += 1
+        gen_epoch_loss += gen_loss.item()
+        dis_epoch_loss += dis_loss.item()
         pbar.set_postfix({'Generator Loss': '{0:.3f}'.format(gen_epoch_loss / steps),
                           'Discriminator Loss': '{0:.3f}'.format(dis_epoch_loss / steps)})
+        
+        if epoch % 1 == 0:
+            show_image(SI[0])
 
-        """for image in SI:
-            show_image(image)"""
+    torch.save(generator.state_dict(), "/content/drive/MyDrive/MODELS/generator.pth")
+    torch.save(discriminator.state_dict(), "/content/drive/MyDrive/MODELS/discriminator.pth")
