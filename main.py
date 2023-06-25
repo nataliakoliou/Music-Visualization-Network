@@ -49,8 +49,10 @@ def prepare_data(dataset_path, eras, sr, n_fft, hop_length, n_mels, display):
             ms = get_mel_spectrogram(audio_path, sr=sr, n_fft=n_fft, hop_length=hop_length, n_mels=n_mels, display=display)
             id = int(audio.split(".")[0][1:])
             pair_names = ["i" + str(id + len(audios) * i) + ".jpg" for i in range(3)]
-            pairs = [transform(Image.open(os.path.join(path, pair))) for pair in pair_names]
-            data.extend([(ms, era, pair) for pair in pairs])
+            pairs = [Image.open(os.path.join(path, pair)) for pair in pair_names]
+            data.extend([(ms, era, transform(pair)) for pair in pairs])
+            mirrored = [pair.transpose(Image.FLIP_LEFT_RIGHT) for pair in pairs]
+            data.extend([(ms, era, transform(mir)) for mir in mirrored])
     return data
 
 def triplet_margin_loss(anchor, positive, negative):
@@ -64,19 +66,19 @@ def nll_loss(output, target):
     loss = nll(log_softmax(output), target)
     return loss
 
-def stGen_loss(fake_output):
+def stGen_loss(fake_logits, fake_output):
     real_labels = torch.ones_like(fake_output)
     criterion = nn.BCEWithLogitsLoss()
-    loss = criterion(fake_output, real_labels)
+    loss = criterion(fake_logits, real_labels)
     return loss
 
-def stDis_loss(fake_output, real_output):
+def stDis_loss(fake_logits, fake_output, real_logits, real_output, smooth=0.1):
     fake_labels = torch.zeros_like(fake_output)
-    real_labels = torch.ones_like(real_output)
+    real_labels = torch.ones_like(real_output) * (1 - smooth)
     criterion = nn.BCEWithLogitsLoss()
-    fake_loss = criterion(fake_output, fake_labels)
-    real_loss = criterion(real_output, real_labels)
-    loss = (fake_loss + real_loss) / 2
+    fake_loss = criterion(fake_logits, fake_labels)
+    real_loss = criterion(real_logits, real_labels)
+    loss = (fake_loss + real_loss)/2
     return loss
 
 def mse_loss(predicted, target):
@@ -87,25 +89,13 @@ def mse_loss(predicted, target):
 def l1_loss(predicted, target):
     criterion = nn.L1Loss()
     loss = criterion(predicted, target)
-    return 100 * loss
-
-def raGen_loss(fake_output, real_output):
-    criterion = nn.BCEWithLogitsLoss()
-    ones = torch.ones_like(real_output)
-    zeros = torch.zeros_like(fake_output)
-    mean_real = torch.mean(real_output, dim=1, keepdim=True)
-    mean_fake = torch.mean(fake_output, dim=1, keepdim=True)
-    loss = (criterion(real_output - mean_fake, zeros) + criterion(fake_output - mean_real, ones))/2
     return loss
 
-def raDis_loss(fake_output, real_output):
-    criterion = nn.BCEWithLogitsLoss()
-    ones = torch.ones_like(real_output)
-    zeros = torch.zeros_like(fake_output)
-    mean_real = torch.mean(real_output, dim=1, keepdim=True)
-    mean_fake = torch.mean(fake_output, dim=1, keepdim=True)
-    loss = (criterion(real_output - mean_fake, ones) + criterion(fake_output - mean_real, zeros))/2
-    return loss
+def transpose_image(image, range_min=0, range_max=1):
+    min_value, max_value = image.min(), image.max()
+    scaled_image = (image - min_value) / (max_value - min_value)
+    transposed_image = (scaled_image * (range_max - range_min)) + range_min
+    return transposed_image
 
 def gram(x):
     c, _, _ = x.size()
@@ -120,11 +110,16 @@ def style_loss(style_features, pair_features):
         loss += F.mse_loss(style_gram, pair_gram)
     return loss / total_samples
 
+def xavier_weights(m):
+    if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
+        nn.init.xavier_normal_(m.weight.data)
+    elif isinstance(m, nn.BatchNorm2d):
+        nn.init.normal_(m.weight.data, mean=1, std=0.02)
+        nn.init.constant_(m.bias.data, 0)
+
 def show_image(image):
     image = image.detach().cpu().numpy()
     image = image.transpose(1, 2, 0)  # transposes the dimensions to match the image format (H, W, C)
-    image = (image - np.min(image)) / (np.max(image) - np.min(image))  # rescale the values to [0, 1]
-    image = np.clip(image, 0, 1)
     plt.imshow(image) # scales the values in the tensor to the appropriate color range and displays it as an image
     plt.axis('off')
     plt.show()
@@ -156,12 +151,11 @@ batches = list(data_loader) # a list of 300 lists\batches
 
 # 1) TRAIN THE ENCODER ################################################################################################################
 
-learning_rate = 0.0001
 num_epochs = 60
 
 encoder = Encoder().to(device)
 #encoder.load_state_dict(torch.load("/content/drive/MyDrive/MODELS/encoder.pth", map_location=torch.device('cpu')))
-enc_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate, weight_decay=0.0001)
+enc_optimizer = optim.Adam(encoder.parameters(), lr=0.0001, betas=(0.5, 0.999))
 encoder.train()
 
 for epoch in range(num_epochs):
@@ -210,12 +204,11 @@ for epoch in range(num_epochs):
 
 # TODO: 2.1) TRAIN THE CUSTOM CLASSIFIER #################################################################################################################
 
-learning_rate = 0.0001
 num_epochs = 100
 
 classifier = Classifier().to(device)
 classifier.load_state_dict(torch.load("/content/drive/MyDrive/MODELS/classifier.pth", map_location=torch.device('cpu')))
-clf_optimizer = optim.Adam(classifier.parameters(), lr=learning_rate, weight_decay=0.0001)
+clf_optimizer = optim.Adam(classifier.parameters(), lr=0.0001, betas=(0.5, 0.999))
 classifier.train()
 
 for epoch in range(num_epochs):
@@ -273,12 +266,11 @@ print("Predicted Era:", predicted_era)
 
 # TODO: 2.3) TRAIN THE PRETRAINED CLASSIFIER ############################################################################################################
 
-learning_rate = 0.0001
 num_epochs = 10
 
 classifier = VGG19(num_classes=5).to(device)
 classifier.load_state_dict(torch.load("/content/drive/MyDrive/MODELS/vgg19.pth", map_location=torch.device('cpu')))
-clf_optimizer = optim.Adam(classifier.parameters(), lr=learning_rate, weight_decay=0.0001)
+clf_optimizer = optim.Adam(classifier.parameters(), lr=0.0001, betas=(0.5, 0.999))
 classifier.train()
 
 for epoch in range(num_epochs):
@@ -318,72 +310,82 @@ classifier.eval()
 
 # TODO: 3) TRAIN THE GAN #####################################################################################################################
 
-learning_rate = 0.0001
-num_epochs = 75
-w1 = 28*2/3
-w2 = 2*1/6
-w3 = 2*1/6
-w4 = 1e-9
-w5 = 28
+num_epochs = 100
+gen_iters = 1
+dis_iters = 3
 
-generator = Generator().to(device)
-generator.load_state_dict(torch.load("/content/drive/MyDrive/MODELS/generator.pth", map_location=torch.device('cpu')))
-gen_optimizer = optim.Adam(generator.parameters(), lr=0.00001)
+noise_dim = 100
+conditional_noise_dim = noise_dim + BATCH_SIZE
+num_classes = len(eras)
+
+w1 = 10
+w2 = 2
+w3 = 100
+
+generator = Generator(noise_dim=conditional_noise_dim).to(device)
+#generator.load_state_dict(torch.load("/content/drive/MyDrive/MODELS/generator.pth", map_location=torch.device('cpu')))
+gen_optimizer = optim.Adam(generator.parameters(), lr=0.00002, betas=(0.5, 0.999))
+generator.apply(xavier_weights)
 generator.train()
 
 discriminator = Discriminator().to(device)
-discriminator.load_state_dict(torch.load("/content/drive/MyDrive/MODELS/discriminator.pth", map_location=torch.device('cpu')))
-dis_optimizer = optim.Adam(discriminator.parameters(), lr=0.00005)
+#discriminator.load_state_dict(torch.load("/content/drive/MyDrive/MODELS/discriminator.pth", map_location=torch.device('cpu')))
+dis_optimizer = optim.Adam(discriminator.parameters(), lr=0.00001, betas=(0.5, 0.999))
+discriminator.apply(xavier_weights)
 discriminator.train()
 
-vgg19 = VGG19().to(device)
-vgg19.eval()
+#vgg19 = VGG19().to(device)
+#vgg19.eval()
 
 for epoch in range(num_epochs):
     gen_epoch_loss, dis_epoch_loss, steps = 0, 0, 0
     pbar = tqdm(data_loader, desc="Epoch {}".format(epoch), total=len(data_loader))
     for i, dl in enumerate(pbar):
         melspecs, eras, pairs = dl
+        #melspecs = torch.transpose(torch.stack(melspecs, dim=0), 0, 1)
+        noise = torch.FloatTensor(BATCH_SIZE, noise_dim).uniform_(-1.0, 1.0)
+        actual_eras = torch.tensor([to_numerical(era) for era in eras])
+        actual_eras_onehot = torch.eye(num_classes)[actual_eras]
+        input = torch.cat((noise, actual_eras_onehot), dim=1).to(device)
 
-        melspecs = torch.transpose(torch.stack(melspecs, dim=0), 0, 1)
-        EMS8x8 = encoder(melspecs.to(device)) # (15,1,8,8)
-        EA = torch.cat([EMS8x8, torch.randn(BATCH_SIZE, 256, 8, 8).to(device)], dim=1).to(device) # (15,257,8,8)
-        SI = generator(EA.to(device)).to(device) # (15,3,64,64)
+        #EMS = encoder(melspecs.to(device)) # (15,1,8,8)
+        #EA = torch.cat([EMS, torch.randn(BATCH_SIZE, 256, 8, 8).to(device)], dim=1).to(device) # (15,257,8,8)
+
+        SI = generator(input).to(device) # (15,3,64,64)
         PI = torch.stack([pair for pair in pairs]).requires_grad_(True).to(device)
-        SI, PI = transpose_image(SI), transpose_image(PI)
-        actual_eras, CSI = torch.tensor([to_numerical(era) for era in eras]).to(device), classifier(SI.to(device))
+        PI = transpose_image(PI, range_min=-1, range_max=1)
 
-        VSI = vgg19(SI)
-        VPI = vgg19(PI)
-        EMS64x64 = F.interpolate(EMS8x8, size=(64, 64), mode='bilinear', align_corners=False).to(device) # (15,1,64,64)
+        CSI = classifier(SI)
 
-        DSI = discriminator(torch.cat([EMS64x64, SI], dim=1)) # (15,1,64,64) + (15,3,64,64) = (15,4,64,64)
-        DPI = discriminator(torch.cat([EMS64x64, PI], dim=1))
+        #VSI = vgg19(SI)
+        #VPI = vgg19(PI)
 
-        gen_optimizer.zero_grad()
-        #loss1 = w1 * stGen_loss(DSI)
-        loss2 = w2 * nll_loss(CSI, actual_eras)
-        loss3 = w3 * l1_loss(SI, PI)
-        #loss4 = w1 * style_loss(VSI, VPI)
-        gen_loss = loss2 + loss3
-        gen_loss.backward()
-        gen_optimizer.step()
+        logSI, sigSI = discriminator(SI)
+        logPI, sigPI = discriminator(PI)
 
-        dis_optimizer.zero_grad()
-        DPI, DSI = DPI.detach(), DSI.detach()
-        DPI.requires_grad_();
-        dis_loss = w5 * stDis_loss(DSI, DPI)
-        dis_loss.backward()
-        dis_optimizer.step()
+        for _ in range(gen_iters):
+            gen_optimizer.zero_grad()
+            gen_loss = w1 * stGen_loss(logSI, sigSI) + w2 * nll_loss(CSI, actual_eras.to(device)) + w3 * l1_loss(SI, PI)
+            gen_loss.backward(retain_graph=True)
+            gen_optimizer.step()
+            gen_epoch_loss += gen_loss.item()
+
+        logSI, sigSI, logPI, sigPI = logSI.detach(), sigSI.detach(), logPI.detach(), sigPI.detach()
+        for _ in range(dis_iters):
+            dis_optimizer.zero_grad()
+            logPI.requires_grad_(); sigPI.requires_grad_()
+            dis_loss = w1 * stDis_loss(logSI, sigSI, logPI, sigPI)
+            dis_loss.backward(retain_graph=True)
+            dis_optimizer.step()
+            dis_epoch_loss += dis_loss.item()
 
         steps += 1
-        gen_epoch_loss += gen_loss.item()
-        dis_epoch_loss += dis_loss.item()
-        pbar.set_postfix({'Generator Loss': '{0:.3f}'.format(gen_epoch_loss / steps),
-                          'Discriminator Loss': '{0:.3f}'.format(dis_epoch_loss / steps)})
+        pbar.set_postfix({'Generator Loss': '{0:.3f}'.format(gen_epoch_loss / (steps * gen_iters)),
+                          'Discriminator Loss': '{0:.3f}'.format(dis_epoch_loss / (steps * dis_iters))})
 
-    if epoch % 10 == 0:
-        show_image(SI[0])
+        if epoch % 1 == 0:
+            SI = transpose_image(SI, range_min=0, range_max=1)
+            show_image(SI[0])
 
     torch.save(generator.state_dict(), "/content/drive/MyDrive/MODELS/generator.pth")
     torch.save(discriminator.state_dict(), "/content/drive/MyDrive/MODELS/discriminator.pth")
