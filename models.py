@@ -139,20 +139,20 @@ class Generator(Module):
             LeakyReLU(0.2, inplace=True),
             Interpolate(scale_factor=2),
             Conv2d(1024, 512, kernel_size=3, stride=1, padding=1),
-            InstanceNorm2d(512),
+            BatchNorm2d(512),
             LeakyReLU(0.2, inplace=True),
             Interpolate(scale_factor=2),
             Conv2d(512, 256, kernel_size=3, stride=1, padding=1),
-            InstanceNorm2d(256),
+            BatchNorm2d(256),
             LeakyReLU(0.2, inplace=True),
             Interpolate(scale_factor=2),
             Conv2d(256, 128, kernel_size=3, stride=1, padding=1),
-            InstanceNorm2d(128),
+            BatchNorm2d(128),
             LeakyReLU(0.2, inplace=True),
             SelfAttention(in_channels=128),
             Interpolate(scale_factor=2),
             Conv2d(128, 64, kernel_size=3, stride=1, padding=1),
-            InstanceNorm2d(64),
+            BatchNorm2d(64),
             LeakyReLU(0.2, inplace=True),
             SelfAttention(in_channels=64),
             Conv2d(64, 3, kernel_size=3, stride=1, padding=1),
@@ -172,29 +172,31 @@ class Discriminator(Module):
         self.layers = Sequential(
             Conv2d(in_channels=3, out_channels=64, kernel_size=4, stride=2, padding=1),
             LeakyReLU(0.2, inplace=True),
-            Dropout(0.5),
+            #Dropout(0.5),
             Conv2d(in_channels=64, out_channels=128, kernel_size=4, stride=2, padding=1),
             BatchNorm2d(128),
             LeakyReLU(0.2, inplace=True),
-            Dropout(0.5),
+            #Dropout(0.5),
             Conv2d(in_channels=128, out_channels=256, kernel_size=4, stride=2, padding=1),
             BatchNorm2d(256),
             LeakyReLU(0.2, inplace=True),
-            Dropout(0.5),
+            #Dropout(0.5),
             Conv2d(in_channels=256, out_channels=512, kernel_size=4, stride=2, padding=1),
             BatchNorm2d(512),
             LeakyReLU(0.2, inplace=True),
-            Dropout(0.5),
+            #Dropout(0.5),
             Conv2d(in_channels=512, out_channels=1024, kernel_size=3, stride=1, padding=1),
             BatchNorm2d(1024),
             LeakyReLU(0.2, inplace=True),
-            Dropout(0.5),
+            #Dropout(0.5),
             Flatten(),
             Linear(4*4*1024, 1),
         )
         self.sigmoid = Sigmoid()
+        #self.noise = GaussianNoise()
 
     def forward(self, x):
+        #x = self.noise(x)
         logits = self.layers(x)
         output = self.sigmoid(logits)
         return (logits, output)
