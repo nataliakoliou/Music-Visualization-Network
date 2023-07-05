@@ -147,7 +147,7 @@ data = prepare_data(dataset_path, art_eras, sr=22050, n_fft=1024, hop_length=256
 
 BATCH_SIZE = 1 # number of samples in each batch
 data_loader = DataLoader(data, batch_size=BATCH_SIZE, shuffle=True, num_workers=15) # len(data_loader) = num_batches = 900*5 // 15 = 300
-batches = list(data_loader) # a list of 300 lists\batches
+batches = list(data_loader)
 
 # 1) TRAIN THE ENCODER ################################################################################################################
 
