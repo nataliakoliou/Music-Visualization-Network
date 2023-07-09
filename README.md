@@ -1,1 +1,1 @@
-# Cross-modal Style Transfer from Music to Visual Arts
+# Music Visualization Network: Towards Audio to Image Synthesis using cDCGAN
