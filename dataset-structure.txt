@@ -7,7 +7,7 @@ MP-Dataset
 │   ├── i0.jpg
 │   ├── i1.jpg
 │   ├── ...
-│   └── ik.jpg
+│   └── im.jpg
 ├── baroque
 │   ├── a0.mp3
 │   ├── a1.mp3
@@ -16,7 +16,7 @@ MP-Dataset
 │   ├── i0.jpg
 │   ├── i1.jpg
 │   ├── ...
-│   └── ik.jpg
+│   └── im.jpg
 ├── classical
 │   ├── a0.mp3
 │   ├── a1.mp3
@@ -25,7 +25,7 @@ MP-Dataset
 │   ├── i0.jpg
 │   ├── i1.jpg
 │   ├── ...
-│   └── ik.jpg
+│   └── im.jpg
 ├── romantic
 │   ├── a0.mp3
 │   ├── a1.mp3
@@ -34,7 +34,7 @@ MP-Dataset
 │   ├── i0.jpg
 │   ├── i1.jpg
 │   ├── ...
-│   └── ik.jpg
+│   └── im.jpg
 └── modern
 │   ├── a0.mp3
 │   ├── a1.mp3
@@ -43,8 +43,9 @@ MP-Dataset
 │   ├── i0.jpg
 │   ├── i1.jpg
 │   ├── ...
-│   └── ik.jpg
+│   └── im.jpg
 └──
 
 > audios: 8.91 seconds long
 > images: 64 x 64 pixels
+> m = 3*k
