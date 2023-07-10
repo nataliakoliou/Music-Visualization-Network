@@ -22,4 +22,12 @@ The following python packages are required for the code to run:
 
 **Alternatively:** you can download [requirements.txt](https://github.com/nataliakoliou/Music-Visualization-Network/blob/main/requirements.txt) and run ```pip install -r requirements.txt```, to automatically install all the packages needed to reproduce my project on your own machine.
 
-**```>```** The text file used in this project consists of short news articles in English from the Wall Street Journal: [wsj_untokenized.txt](https://github.com/nataliakoliou/NLP-Various-Implementations/blob/main/Assignment-1/Assignment-1a/wsj_untokenized.txt). Please note that in order to run the code, you should have this text file in your local folder.
+  ## How to Run the Code
+  1) Make a copy of the dataset file "musart-dataset.txt" from the GitHub repository and store it in your Google Drive under a folder named "DATASETS".
+  2) Create a folder named "MODELS" in your Google Drive and place the provided pre-trained models (mentioned in "pretrained-models.txt") in this folder.
+  3) Make sure to keep the following files in your Drive: "_utils.py", "_models.py", "_train.py", "_test.py", and "main.py".
+  4) To run the code, execute the "main.py" script. You can use Google Colab for this purpose. Follow the instructions provided in the console. If you want to train the MVNet, type "train" when prompted. If you want to test the MVNet, type "test".
+  5) During the process (either training or testing), you will be asked to confirm whether you already have the "training.npy" and "testing.npy" data files in your Drive under a folder named "DATA". If you have these files, type "y" (yes). If you don't have them, type "n" (no), and the code will create them for you. Make sure to create the "DATA" folder in your Drive if it doesn't exist.
+
+## Author
+Natalia Koliou: find me on [LinkedIn](https://www.linkedin.com/in/natalia-k-b37b01197/).
