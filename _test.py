@@ -8,7 +8,7 @@ from _utils import *
 def test_generator(device, data, enc_dim=10, batch_size=1, noise_dim=100):
     counter, loss = 0, 0
     conditional_noise_dim = noise_dim + enc_dim
-    data_loader = DataLoader(data, batch_size=batch_size, shuffle=False, num_workers=15)
+    data_loader = DataLoader(data, batch_size=batch_size, shuffle=False, num_workers=2)
     images = {"renaissance": [], "baroque": [], "classical": [], "romantic": [], "modern": []}
 
     encoder = Encoder().to(device)
@@ -34,6 +34,7 @@ def test_generator(device, data, enc_dim=10, batch_size=1, noise_dim=100):
         input = torch.cat((noise, encoding), dim=1).to(device)
 
         SI = generator(input).to(device)
+
         #CSI = classifier(SI).to(device)
         #loss += 100 * nll_loss(CSI, actual_eras.to(device))
         pbar.set_postfix({'Classifier Loss': '{0:.3f}'.format(loss / (counter + 1))})
