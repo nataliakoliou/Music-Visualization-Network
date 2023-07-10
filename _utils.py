@@ -9,6 +9,13 @@ import torchvision.transforms as transforms
 from PIL import Image
 import matplotlib.image as mpimg
 
+def show_image(image):
+    image = image.detach().cpu().numpy()
+    image = image.transpose(1, 2, 0)  # transposes the dimensions to match the image format (H, W, C)
+    plt.imshow(image) # scales the values in the tensor to the appropriate color range and displays it as an image
+    plt.axis('off')
+    plt.show()
+    
 def show_spectrogram(name, ms, sr, hop_length):
     ms = librosa.power_to_db(ms, ref=np.max)
     plt.figure(figsize=(10, 6))
