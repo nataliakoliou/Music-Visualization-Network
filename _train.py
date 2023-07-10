@@ -106,6 +106,7 @@ def train_gan(device, data, enc_dim=10, batch_size=15, num_epochs=100, gen_iters
             input = torch.cat((noise, encoding), dim=1).to(device)
 
             SI = generator(input).to(device)
+
             PI = torch.stack([pair for pair in pairs]).requires_grad_(True).to(device)
             PI = transpose_image(PI, range_min=-1, range_max=1)
 
@@ -133,6 +134,12 @@ def train_gan(device, data, enc_dim=10, batch_size=15, num_epochs=100, gen_iters
 
             gan_logs(batch_size, epoch, SI, PI) if visualize and random_batch == i else None
 
+            """if i == random_batch:
+                TSI = transpose_image(SI, range_min=0, range_max=1)
+                show_image(TSI[0])
+                show_image(TSI[1])
+                show_image(TSI[2])"""
+
         gan_losses['gen'].append(gen_epoch_loss / (steps * gen_iters))
         gan_losses['dis'].append(dis_epoch_loss / (steps * dis_iters))
         monitor_gan(gan_losses, epoch+1)
@@ -154,5 +161,5 @@ def train(device):
     else:
         print("Invalid choice. Please select 'y' or 'n'.")
 
-    #train_encoder(device, data, enc_dim=10, batch_size=1, num_epochs=15, visualize=True)
-    train_gan(device, data, enc_dim=10, batch_size=15, num_epochs=300, gen_iters=1, dis_iters=1, noise_dim=100, visualize=True)
+    train_encoder(device, data, enc_dim=10, batch_size=1, num_epochs=15, visualize=True)
+    train_gan(device, data, enc_dim=10, batch_size=15, num_epochs=100, gen_iters=1, dis_iters=1, noise_dim=100, visualize=True)
