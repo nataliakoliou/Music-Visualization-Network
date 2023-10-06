@@ -30,4 +30,4 @@ The following python packages are required for the code to run:
   5) During the process (either training or testing), you will be asked to confirm whether you already have the training.npy and testing.npy data files in your Drive under a folder named "DATA". If you have these files, type "y" (yes). If you don't have them, type "n" (no), and the code will create them for you. Make sure to create the "DATA" folder in your Drive if it doesn't exist.
 
 ## Author
-Natalia Koliou: find me on [LinkedIn](https://www.linkedin.com/in/natalia-k-b37b01197/).
+Natalia Koliou: find me on [LinkedIn](https://www.linkedin.com/in/natalia-koliou-b37b01197/).
